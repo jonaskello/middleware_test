@@ -1,0 +1,5 @@
+name: middleware_test
+dependencies:
+  shelf: any
+  shelf_static: any
+  shelf_proxy: any
