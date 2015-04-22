@@ -1,107 +1,71 @@
-/*
-import 'package:shelf/shelf.dart';
-import 'package:shelf/shelf_io.dart';
-import 'package:shelf_static/shelf_static.dart';
-
-Handler middleware(Handler innerHandler) {
-  return (Request req) {
-    var x = req.requestedUri;
-    if (req.method == "GET" && req.headers["xxx"] == 'yyy') {
-      // ...
-    } else {
-      return innerHandler(req);
-    }
-  };
-}
-
-main() {
-
-  var staticHandler = createStaticHandler('/Users/JonKel', defaultDocument: 'index.html');
-
-  var handler = const Pipeline()
-  .addMiddleware(middleware)
-//  .addHandler((request) => new Response.ok("success"));
-  .addHandler(staticHandler);
-
-  serve(handler, 'localhost', 1234);
-
-//serve(middleware(handler), 'localhost', 1234);
-
-//  serve(middleware((request) {
-//    if(request.method == "GET") {
-//      // ...
-//    }
-//    return new Response.ok("success");
-//  }), 'localhost', 1234);
-}
-
-*/
-
-
 import 'dart:io';
 import 'dart:async';
-//import 'package:crypto/crypto.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as io;
 import 'package:shelf_proxy/shelf_proxy.dart' as proxy;
 
-import 'history_api_fallback_middleware.dart';
+class CopiedRequest extends Request {
 
-Future main() async {
+  List<List<int>> _body;
+  Request _request;
 
-  //var authMiddleware = await auth_helper.createAuthMiddleware();
+  CopiedRequest(Request request, [Uri requestedUri]) : super(
+      request.method,
+      requestedUri != null ? requestedUri : request.requestedUri,
+      protocolVersion: request.protocolVersion,
+      headers: request.headers, handlerPath: request.handlerPath,
+      //url: request.url,
+      encoding: request.encoding, context: request.context) {
+    _request = request;
+  }
 
-  Handler authenticatedApiHandler = const Pipeline()
-  .addMiddleware(createMiddleware(requestHandler: (Request request) {
-    // This middleware continues the pipeline if the request is for the API, otherwise it returns 404
-    if (request.url.path.startsWith('api/')) {
-      return null;
+  Future copyBody() async {
+    _body = await _request.read().toList();
+  }
+
+  @override Stream<List<int>> read() {
+    return new Stream.fromIterable(_body);
+  }
+
+}
+
+Handler copyRequestMiddleware(Handler innerHandler) {
+  return (Request req) async {
+    var copiedRequest = new CopiedRequest(req);
+    await copiedRequest.copyBody();
+    return innerHandler(copiedRequest);
+  };
+
+}
+
+Handler middleware(Handler innerHandler) {
+  return (Request req) async {
+
+    Request nextRequest = req;
+    if (req.method == "GET" && (req.headers["accept"] == 'html' || req.headers["accept"] == '*/*')) {
+      var copied = new CopiedRequest(req, req.requestedUri.replace(path: "/default.aspx")) ;
+      await copied.copyBody();
+      nextRequest = copied;
     }
-    else {
-//        print("Not an API call ${request.url.path}");
-      return new Response.notFound("Not an API call");
-    }
-  }))
-//  .addMiddleware(authMiddleware)
-  .addHandler(_apiHandler);
+    return innerHandler(nextRequest);
+  };
+}
 
-//  Handler authenticatedFileHandler = const Pipeline()
-//  .addMiddleware(createMiddleware(requestHandler: (Request request) {
-//    // This middleware continues the pipeline if the request is for the API, otherwise it returns 404
-//    if (request.url.path.startsWith('file')) {
-//      return null;
-//    }
-//    else {
-////        print("Not an API call ${request.url.path}");
-//      return new Response.notFound("Not an file call");
-//    }
-//  }))
-//  .addMiddleware(authMiddleware)
-//  .addHandler(_fileHandler);
+void main() {
 
-
-  Handler staticOrProxyHandler;
-  staticOrProxyHandler = proxy.proxyHandler("http://localhost:63000/promaster/web/");
+  Handler proxyHandler = proxy.proxyHandler("http://www.divid.se/does_not_exist");
 
   var rewriteToIndexHandler = new Pipeline()
-  .addMiddleware(new HistoryApiFallbackMiddleware().middleware)
-  .addHandler(staticOrProxyHandler);
+  .addMiddleware(middleware)
+  .addHandler(proxyHandler);
 
-
-  // We need to enable anonymous access to the static script client, but authenticated access to API
-  // so therefore we cascade the handlers so authentication will not be required for access to static client
-  // Cascade calls the handlers in sequence, stopping at the first with acceptable reponse.
-  // First we try authenticated API handler, if it does not return a good response, then use anonymous static handler.
   Handler cascadeHandler = new Cascade()
-  .add(authenticatedApiHandler)
-//    .add(authenticatedFileHandler)
-  .add(staticOrProxyHandler)
+  .add(proxyHandler)
   .add(rewriteToIndexHandler)
   .handler;
 
   Handler handler = const Pipeline()
-//      .addMiddleware(logRequests())
-//  .addMiddleware(exceptionResponse())
+  .addMiddleware(copyRequestMiddleware)
   .addHandler(cascadeHandler);
 
   io.serve(handler, InternetAddress.ANY_IP_V4, 1234).then((server) {
@@ -109,43 +73,4 @@ Future main() async {
   });
 
 }
-
-Future<Response> _apiHandler(Request request) async {
-//    var fileResponse = await _fileHandler(request);
-//    if (fileResponse != null && fileResponse.statusCode == 200)
-//      return fileResponse;
-//  var response = _shelfRequestHandler.HandleShelfRequest(request);
-//  return response;
-  return new Response.notFound("Not API");
-}
-
-//Future<Response> _fileHandler(Request request) async {
-//  if (!request.url.path.startsWith('file'))
-//    return new Response.notFound("Not a file request");
-//
-//  if (!request.requestedUri.queryParameters.containsKey("id"))
-//    return new Response.notFound("Must specify file id");
-//
-//  var id = request.requestedUri.queryParameters["id"];
-//  var result = await _sqlQueryExecutor.execute("SELECT type, data FROM file WHERE id = @id", {
-//    "id" : id
-//  });
-//
-//  var file = result.singleAsList(false);
-//  if (file == null)
-//    return new Response.notFound("File with id " + id + " not found");
-//  String contentType;
-//  if (file[0] == "pdf")
-//    contentType = "application/pdf";
-//  else if (file[0] == "jpg")
-//    contentType = "image/jpg";
-//  else
-//    return new Response.internalServerError();
-//  var base64Encoded = CryptoUtils.base64StringToBytes(file[1]);
-//  var stream = new Stream.fromIterable(new List<List<int>>()
-//    ..add(base64Encoded));
-//  return new Response.ok(stream, headers: {
-//    'Content-Type' : contentType
-//  });
-//}
 
